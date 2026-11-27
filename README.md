@@ -1,43 +1,64 @@
-# best-flight-game-20261126-0057
+# Kurir Langit — Kepulauan Angin
 
-[![make.fun · best-flight-game-20261126-0057](https://make.fun/badge/best-flight-game-20261126-0057.svg)](https://make.fun/bounty/best-flight-game-20261126-0057?utm_source=github&utm_medium=readme&utm_campaign=best-flight-game-20261126-0057)
-[![rank](https://make.fun/badge/best-flight-game-20261126-0057/gibalers-rgb/best-flight-game-20261126-0057/rank.svg)](https://make.fun/bounty/best-flight-game-20261126-0057/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=best-flight-game-20261126-0057)
-[![reward](https://make.fun/badge/best-flight-game-20261126-0057/gibalers-rgb/best-flight-game-20261126-0057/reward.svg)](https://make.fun/bounty/best-flight-game-20261126-0057?utm_source=github&utm_medium=readme&utm_campaign=best-flight-game-20261126-0057)
+[![Make the best flight game](https://make.fun/badge/best-flight-game-20261126-0057.svg)](https://make.fun/competitions/best-flight-game-20261126-0057)
+[![Rank](https://make.fun/badge/best-flight-game-20261126-0057/gibalers-rgb/best-flight-game-20261126-0057/rank.svg)](https://make.fun/competitions/best-flight-game-20261126-0057)
+[![Reward](https://make.fun/badge/best-flight-game-20261126-0057/gibalers-rgb/best-flight-game-20261126-0057/reward.svg)](https://make.fun/competitions/best-flight-game-20261126-0057)
 
-**Skycourier: Island Hopper** — a complete flight game in a desktop browser,
-from static files with no network request. Fly the courier plane across a
-tropical archipelago in chase view: a cockpit-style HUD with altitude, speed
-and heading, lit instruments (airspeed, altimeter, compass, fuel), runways and
-gold target rings ahead, and recognisable island terrain below.
+Terbang sebagai kurir langit di atas kepulauan tropis dengan pesawat amfibi
+**Kestrel**. Tiga kontrak menantimu: menembus cincin emas di atas laguna,
+mengantar paket ke tiga desa pulau, lalu mendarat pulang dengan mulus di
+landasan Pulau Besar.
 
-Three missions with different goals: **Ring Run** (fly through 8 gold rings),
-**Island Hop** (land on three island runways), and **Courier Dash** (pick up a
-parcel on Home runway and deliver it to Far Point in under 4 minutes). Fuel
-drains with throttle and hard landings damage the airframe, so every sortie is
-a decision about speed, altitude and fuel.
+## Cara bermain
 
-## Controls
+| Tombol | Aksi |
+| ------ | ---- |
+| W / S | Gas naik / turun |
+| ← / → atau A / D | Belok (roll) |
+| ↑ / ↓ | Naik / turun (pitch) |
+| Spasi | Lepas paket (Kontrak 2) |
+| M | Kendali mouse aktif/mati |
+| P | Jeda |
+| R | Ulang kontrak aktif |
 
-- **Arrow keys** pitch and roll; **mouse drag** steers like a stick
-- **W / S** throttle up / down, **Shift** full throttle, **Ctrl** idle
-- **Space** brake, **F** flaps, **P** pause, **M** mute, **R** restart
-- **1 / 2 / 3** start Ring Run, Island Hop, Courier Dash
+Mendaratlah di bawah 34 m/s dengan sayap datar dan turunan lembut — menukik
+terlalu keras, miring, atau terlalu cepat berarti kecelakaan dan kamu kembali
+ke titik aman.
 
-## Play it
+## Menjalankan game
 
-```sh
-node serve.ts        # serves game/ on http://localhost:8080
-```
-
-Open http://localhost:8080 in desktop Chrome and fly. Screenshot presets
-(`?shot=takeoff|ring|islands|landing`) freeze a deterministic frame of the
-game's own code — the entry's screenshots were taken from those URLs.
-
-## Hand it in
+Game ini file statis tanpa build step — cukup sajikan folder `game/` dengan
+server HTTP apa pun:
 
 ```sh
-mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
+node serve.ts        # lalu buka http://localhost:8123/
 ```
 
-`main.ts` copies `game/` and `screenshots/` to `/output` and writes
-`/output/dossier.json` with the vendored make.fun library.
+atau:
+
+```sh
+npx serve game
+```
+
+Buka `game/index.html` di desktop Chrome dan mainkan dengan keyboard dan mouse.
+Semua bunyi disintesis WebAudio di dalam game; tidak ada aset jaringan.
+
+## Struktur
+
+- `game/index.html` — halaman game
+- `game/style.css` — tampilan kartu, toast, dan debrief
+- `game/src/boot.js` — loop utama, state machine, mode demo
+- `game/src/projection.js` — kamera kejar dan proyeksi perspektif
+- `game/src/archipelago.js` — pulau, laut, langit, awan, landasan
+- `game/src/kestrel.js` — pesawat amfibi dan model terbang
+- `game/src/contracts.js` — tiga kontrak kurir dan penilaian
+- `game/src/gauges.js` — HUD, kompas, horizon buatan, panel instrumen
+- `game/src/sounds.js` — bunyi mesin, angin, dan peristiwa (WebAudio)
+- `game/src/controls.js` — keyboard dan mouse
+- `main.ts` — menyerahkan game ke make.fun (menyalin `game/` + `screenshots/`, menulis `dossier.json`)
+- `serve.ts` — server statis lokal untuk mencoba game
+- `screenshots/` — tangkapan layar asli dari game ini
+
+## Lisensi
+
+MIT — lihat [LICENSE](LICENSE).

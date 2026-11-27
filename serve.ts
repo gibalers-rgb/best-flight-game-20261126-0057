@@ -1,68 +1,40 @@
-// A tiny static server for game/ (Node 22, standard library only), so the
-// game can be played locally without a build step:
-//   node serve.ts            serves game/ on http://localhost:8080
-//   node serve.ts --port 9000
-// It sends the MIME types a browser game needs and refuses any path outside
-// game/. A development convenience, not a web server for the internet.
-
-import { createReadStream, statSync } from "node:fs";
+// serve.ts — server statis kecil untuk memainkan game secara lokal.
+// Jalankan: node serve.ts [port]   lalu buka http://localhost:PORT/
+// Hanya melayani file di bawah game/ (dan index di /), tanpa dependensi.
 import { createServer } from "node:http";
-import { extname, join, normalize, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { readFileSync, existsSync, statSync } from "node:fs";
+import { join, resolve, extname, normalize } from "node:path";
 
-const root = resolve(fileURLToPath(new URL("./game", import.meta.url)));
+const PORT = Number(process.argv[2] || 8123);
+const GAME = resolve(import.meta.dirname, "game");
 
-const MIME = {
+const TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
   ".png": "image/png",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
+  ".svg": "image/svg+xml",
+  ".wav": "audio/wav",
 };
 
-function pickPort() {
-  const args = process.argv.slice(2);
-  const at = args.indexOf("--port");
-  const wanted = at === -1 ? 8080 : Number(args[at + 1]);
-  return Number.isInteger(wanted) && wanted > 0 && wanted < 65536 ? wanted : 8080;
-}
+const server = createServer((req, res) => {
+  const url = new URL(req.url || "/", "http://localhost");
+  const rel = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
+  const file = normalize(join(GAME, rel));
+  if (!file.startsWith(GAME) || !existsSync(file) || !statSync(file).isFile()) {
+    res.writeHead(404, { "content-type": "text/plain" });
+    res.end("tidak ditemukan: " + url.pathname);
+    return;
+  }
+  res.writeHead(200, { "content-type": TYPES[extname(file)] || "application/octet-stream" });
+  res.end(readFileSync(file));
+});
 
-function serveFile(request, response) {
-  const url = new URL(request.url ?? "/", "http://localhost");
-  let pathname;
-  try {
-    pathname = decodeURIComponent(url.pathname);
-  } catch {
-    response.writeHead(400).end("bad request");
-    return;
-  }
-  if (pathname.endsWith("/")) pathname += "index.html";
-  const file = resolve(join(root, normalize(pathname)));
-  if (file !== root && !file.startsWith(root + sep)) {
-    response.writeHead(403).end("forbidden");
-    return;
-  }
-  let size;
-  try {
-    size = statSync(file).size;
-  } catch {
-    response.writeHead(404).end("not found");
-    return;
-  }
-  response.writeHead(200, {
-    "content-type": MIME[extname(file).toLowerCase()] ?? "application/octet-stream",
-    "content-length": size,
-    "cache-control": "no-store",
-  });
-  if (request.method === "HEAD") {
-    response.end();
-    return;
-  }
-  createReadStream(file).pipe(response);
-}
-
-const port = pickPort();
-createServer(serveFile).listen(port, "127.0.0.1", () => {
-  console.log(`game/ is on http://localhost:${port}`);
+server.listen(PORT, () => {
+  console.log(`Kurir Langit dimainkan di http://localhost:${PORT}/`);
+  console.log(`Mode demo: ?demo=takeoff | ?demo=rings | ?demo=drop | ?demo=landing`);
 });
