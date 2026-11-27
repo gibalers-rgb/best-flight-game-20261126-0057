@@ -1,7 +1,7 @@
-// Missions for Skycourier: three sorties with different goals, so flying well
-// is a decision, not just a straight line. Fuel and damage turn every sortie
-// into a trade-off: push the throttle and you get there faster on less fuel
-// margin; fly low and fast and a mistake is a crash.
+// Missions for Skycourier: Island Hopper — three sorties with different
+// goals, so flying well is a decision, not just a straight line. Fuel and
+// damage turn every sortie into a trade-off: push the throttle and you get
+// there faster on less fuel margin; fly low and fast and a mistake is a crash.
 //
 //   1. Ring Run — fly through all 8 rings in order, as fast as you can.
 //   2. Island Hop — land cleanly on the runways of Palm Cay, Turtle Rock and
@@ -11,7 +11,7 @@
 
 import { ISLANDS, RINGS } from "./world.js";
 
-export const MISSIONS = [
+export const SORTIES = [
   {
     id: 1,
     name: "Ring Run",
@@ -29,10 +29,14 @@ export const MISSIONS = [
   },
 ];
 
-export function createMissionState(id) {
-  const mission = MISSIONS.find((m) => m.id === id) ?? MISSIONS[0];
+export function sortieById(id) {
+  return SORTIES.find((m) => m.id === id) ?? SORTIES[0];
+}
+
+export function newSortie(id) {
+  const sortie = sortieById(id);
   return {
-    mission,
+    sortie,
     ringIndex: 0,
     // Island Hop legs, in order: the island to land on next.
     hopLegs: [ISLANDS[1], ISLANDS[2], ISLANDS[3]],
@@ -44,15 +48,15 @@ export function createMissionState(id) {
     elapsed: 0,
     score: 0,
     done: false,
-    message: mission.brief,
+    message: sortie.brief,
     messageTimer: 4,
   };
 }
 
 // The current objective, as one short line for the HUD.
-export function objectiveLine(s) {
+export function sortieObjective(s) {
   if (s.done) return "Mission complete — press R to fly again";
-  const m = s.mission;
+  const m = s.sortie;
   if (m.id === 1) {
     return s.ringIndex >= RINGS.length
       ? "All rings flown!"
@@ -69,8 +73,8 @@ export function objectiveLine(s) {
 
 // The target the HUD arrow and the next-ring beacon should point at:
 // a ring, a runway, or the parcel / delivery runway.
-export function currentTarget(s, plane) {
-  const m = s.mission;
+export function sortieTarget(s) {
+  const m = s.sortie;
   if (m.id === 1 && s.ringIndex < RINGS.length) {
     const r = RINGS[s.ringIndex];
     return { x: r.x, y: r.y, z: r.z, kind: "ring", radius: r.r };
@@ -92,11 +96,11 @@ export function currentTarget(s, plane) {
 }
 
 // Per-frame mission logic. `events` collects what happened this frame:
-// "ring", "landed", "hard", "crash", "pickup", "delivered", "complete",
-// "timeout", "fuel". The caller turns events into sound and messages.
-export function stepMission(s, plane, dt, groundY, events) {
+// "ring", "pickup", "delivered", "complete", "timeout", "fuel". The caller
+// turns events into sound and messages.
+export function advanceSortie(s, plane, dt, events) {
   s.elapsed += dt;
-  const m = s.mission;
+  const m = s.sortie;
 
   if (m.id === 3 && !s.done) {
     s.timeLeft -= dt;
@@ -126,7 +130,7 @@ export function stepMission(s, plane, dt, groundY, events) {
         s.done = true;
         s.score += 500;
         events.push("complete");
-        s.message = `Ring Run complete in ${fmtTime(s.elapsed)}! Score ${s.score}. Press R to fly again.`;
+        s.message = `Ring Run complete in ${formatClock(s.elapsed)}! Score ${s.score}. Press R to fly again.`;
         s.messageTimer = 8;
       } else {
         s.message = `Ring ${s.ringIndex} of ${RINGS.length} — nice flying!`;
@@ -154,9 +158,10 @@ export function stepMission(s, plane, dt, groundY, events) {
 
 // Called when the wheels touch ground. Returns what the touchdown means for
 // the active mission: "landed" advances a leg, "hard" damages the plane,
-// "crash" ends the flight. `runway` is the runway landed on, or null.
-export function onTouchdown(s, plane, runway, quality) {
-  const m = s.mission;
+// "crash" ends the flight, "complete" finishes the mission. `runway` is the
+// runway landed on, or null for open ground.
+export function touchdownOutcome(s, plane, runway, quality) {
+  const m = s.sortie;
   if (quality === "crash") return "crash";
 
   if (m.id === 2 && runway) {
@@ -176,7 +181,7 @@ export function onTouchdown(s, plane, runway, quality) {
     if (runway === ISLANDS[0].runway && s.hopIndex >= s.hopLegs.length) {
       s.done = true;
       s.score += 500;
-      s.message = `Island Hop complete in ${fmtTime(s.elapsed)}! Score ${s.score}. Press R to fly again.`;
+      s.message = `Island Hop complete in ${formatClock(s.elapsed)}! Score ${s.score}. Press R to fly again.`;
       s.messageTimer = 8;
       return "complete";
     }
@@ -185,7 +190,7 @@ export function onTouchdown(s, plane, runway, quality) {
   if (m.id === 3 && s.delivered && runway === ISLANDS[4].runway) {
     s.done = true;
     s.score += 500 + Math.max(0, Math.round(s.timeLeft)) * 2;
-    s.message = `Delivered with ${fmtTime(s.timeLeft)} to spare! Score ${s.score}. Press R to fly again.`;
+    s.message = `Delivered with ${formatClock(s.timeLeft)} to spare! Score ${s.score}. Press R to fly again.`;
     s.messageTimer = 8;
     return "complete";
   }
@@ -201,13 +206,14 @@ export function onTouchdown(s, plane, runway, quality) {
   return quality;
 }
 
-export function fmtTime(sec) {
+export function formatClock(sec) {
   const s = Math.max(0, Math.round(sec));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
-// Distance and bearing from the plane to a target, for the HUD arrow.
-export function bearingTo(plane, target) {
+// Distance and relative bearing from the plane to a target, for the HUD arrow.
+// `rel` is the bearing relative to the nose: 0 is dead ahead, + is right.
+export function relativeBearing(plane, target) {
   const dx = target.x - plane.x;
   const dz = target.z - plane.z;
   const dist = Math.hypot(dx, dz);

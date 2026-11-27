@@ -1,17 +1,18 @@
-// Rendering for Skycourier: a chase-view pseudo-3D scene on a 2D canvas.
+// Rendering for Skycourier: Island Hopper — a chase-view pseudo-3D scene
+// on a 2D canvas.
 //
-// The camera sits behind and just above the plane and looks ahead along its
-// nose. World points are projected with a real camera basis (forward / right /
-// up vectors), so the horizon, the sea, the islands, the runways and the rings
-// all move together as the plane banks and climbs. The plane itself is drawn
-// in the frame, banking with its roll, and the bottom of the screen is a lit
-// instrument panel: airspeed, altimeter, compass and fuel, with altitude,
-// speed and heading repeated on the HUD. No images, no libraries — every pixel
-// is drawn from the world data each frame.
+// The camera sits behind and just above the aircraft and looks ahead along
+// its nose. World points are projected with a real camera basis (forward /
+// right / up vectors), so the horizon, the sea, the islands, the runways and
+// the rings all move together as the aircraft banks and climbs. The aircraft
+// itself is drawn in the frame, banking with its roll, and the bottom of the
+// screen is a lit instrument panel: airspeed, altimeter, compass and fuel,
+// with altitude, speed and heading repeated on the HUD. No images, no
+// libraries — every pixel is drawn from the world data each frame.
 
-import { ISLANDS, RINGS } from "./world.js";
-import { clamp } from "./physics.js";
-import { bearingTo } from "./missions.js";
+import { ISLANDS, RINGS, HAZE_DISTANCE, plateauTop } from "./world.js";
+import { clampValue, KNOTS_PER_MS, FEET_PER_M } from "./physics.js";
+import { relativeBearing } from "./missions.js";
 
 // Fixed clouds: white puffs floating over the sea, for depth and scale.
 const CLOUDS = [
@@ -25,10 +26,10 @@ const CLOUDS = [
   { x: -2600, y: 740, z: -4800, s: 240 },
 ];
 
-const KNOTS = 1.94384; // m/s to knots
-const FEET = 3.28084;  // m to ft
+const KNOTS = KNOTS_PER_MS; // m/s to knots
+const FEET = FEET_PER_M;  // m to ft
 
-export function createRenderer(canvas) {
+export function makeRenderer(canvas) {
   const ctx = canvas.getContext("2d");
   let W = 0;
   let H = 0;
@@ -44,8 +45,24 @@ export function createRenderer(canvas) {
   resize();
   window.addEventListener("resize", resize);
 
-  // Camera basis from the plane: forward along the nose, right and up.
-  function camera(plane) {
+  // --- vector helpers -------------------------------------------------------
+  function unit(v) {
+    const l = Math.hypot(v.x, v.y, v.z) || 1;
+    return { x: v.x / l, y: v.y / l, z: v.z / l };
+  }
+  function cross(a, b) {
+    return {
+      x: a.y * b.z - a.z * b.y,
+      y: a.z * b.x - a.x * b.z,
+      z: a.x * b.y - a.y * b.x,
+    };
+  }
+  function dot(a, b) {
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+  }
+
+  // Camera basis from the aircraft: forward along the nose, right and up.
+  function buildCamera(plane) {
     const h = (plane.heading * Math.PI) / 180;
     const p = (plane.pitch * Math.PI) / 180;
     const fwd = {
@@ -63,40 +80,14 @@ export function createRenderer(canvas) {
       y: plane.y + fwd.y * 60 + 2,
       z: plane.z + fwd.z * 60,
     };
-    const f = norm({
-      x: look.x - pos.x,
-      y: look.y - pos.y,
-      z: look.z - pos.z,
-    });
-    const r = norm(cross(f, { x: 0, y: 1, z: 0 }));
+    const f = unit({ x: look.x - pos.x, y: look.y - pos.y, z: look.z - pos.z });
+    const r = unit(cross(f, { x: 0, y: 1, z: 0 }));
     const u = cross(r, f);
     return { pos, f, r, u, focal: H * 0.95 };
   }
 
-  function norm(v) {
-    const l = Math.hypot(v.x, v.y, v.z) || 1;
-    return { x: v.x / l, y: v.y / l, z: v.z / l };
-  }
-  function cross(a, b) {
-    return {
-      x: a.y * b.z - a.z * b.y,
-      y: a.z * b.x - a.x * b.z,
-      z: a.x * b.y - a.y * b.x,
-    };
-  }
-  function dot(a, b) {
-    return a.x * b.x + a.y * b.y + a.z * b.z;
-  }
-
-  // Project a world point to screen space; null when behind the camera.
-  function project(cam, p) {
-    const c = camSpace(cam, p);
-    if (c.z < 2) return null;
-    return toScreen(cam, c);
-  }
-
-  // Camera-space point (x right, y up, z forward along the view).
-  function camSpace(cam, p) {
+  // World point -> camera space (x right, y up, z forward along the view).
+  function toCamera(cam, p) {
     const v = { x: p.x - cam.pos.x, y: p.y - cam.pos.y, z: p.z - cam.pos.z };
     return { x: dot(v, cam.r), y: dot(v, cam.u), z: dot(v, cam.f) };
   }
@@ -108,6 +99,13 @@ export function createRenderer(canvas) {
       z: c.z,
       scale: cam.focal / c.z,
     };
+  }
+
+  // Project a world point to screen space; null when behind the camera.
+  function project(cam, p) {
+    const c = toCamera(cam, p);
+    if (c.z < 2) return null;
+    return toScreen(cam, c);
   }
 
   // Sutherland–Hodgman clip of a polygon against the near plane z >= near:
@@ -129,15 +127,33 @@ export function createRenderer(canvas) {
     return out;
   }
 
+  // Distance haze: 1 up close, fading to 0.15 at the fog distance.
   function haze(z) {
-    // Distance haze: 1 up close, fading to 0 at the fog distance.
-    return clamp(1 - z / 9000, 0.15, 1);
+    return clampValue(1 - z / HAZE_DISTANCE, 0.15, 1);
   }
 
-  function drawSkySea(cam, plane) {
+  function tracePoly(points) {
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+    ctx.closePath();
+  }
+
+  function roundRectPath(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  // --- sky, sea, clouds ------------------------------------------------------
+  function paintSkySea(cam, plane) {
     // The horizon sits where the camera's pitch puts it.
     const horizonY = H / 2 - Math.tan((plane.pitch * Math.PI) / 180) * cam.focal
-      - (cam.pos.y / 9000) * H * 0.35;
+      - (cam.pos.y / HAZE_DISTANCE) * H * 0.35;
     const sky = ctx.createLinearGradient(0, 0, 0, Math.max(horizonY, 1));
     sky.addColorStop(0, "#2f6fd0");
     sky.addColorStop(0.7, "#7fb2e8");
@@ -167,7 +183,7 @@ export function createRenderer(canvas) {
     return horizonY;
   }
 
-  function drawClouds(cam) {
+  function paintClouds(cam) {
     ctx.save();
     for (const c of CLOUDS) {
       const p = project(cam, c);
@@ -185,9 +201,10 @@ export function createRenderer(canvas) {
     ctx.restore();
   }
 
-  function drawIsland(cam, island) {
+  // --- islands and runways ---------------------------------------------------
+  function paintIsland(cam, island) {
     // Project a ring of points around the island at sea level (sand rim),
-    // then a smaller, higher ring (green top), then the peak.
+    // then a smaller, higher ring (green top).
     const rim = [];
     const top = [];
     const N = 14;
@@ -199,7 +216,7 @@ export function createRenderer(canvas) {
       if (pr) rim.push(pr);
       const tx = island.x + Math.cos(a) * island.radius * 0.62;
       const tz = island.z + Math.sin(a) * island.radius * 0.62;
-      const pt = project(cam, { x: tx, y: island.peak * 0.82, z: tz });
+      const pt = project(cam, { x: tx, y: plateauTop(island), z: tz });
       if (pt) top.push(pt);
     }
     if (rim.length < 3) return;
@@ -209,28 +226,21 @@ export function createRenderer(canvas) {
     ctx.globalAlpha = fade;
     // Sand rim.
     ctx.fillStyle = island.sand;
-    poly(rim);
+    tracePoly(rim);
     ctx.fill();
     // Green top.
     if (top.length >= 3) {
       ctx.fillStyle = island.color;
-      poly(top);
+      tracePoly(top);
       ctx.fill();
     }
     ctx.restore();
-    drawRunway(cam, island, fade);
+    paintRunway(cam, island, fade);
   }
 
-  function poly(points) {
-    ctx.beginPath();
-    ctx.moveTo(points[0].x, points[0].y);
-    for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
-    ctx.closePath();
-  }
-
-  function drawRunway(cam, island, fade) {
+  function paintRunway(cam, island, fade) {
     const rw = island.runway;
-    const topY = island.peak * 0.82 + 2;
+    const topY = plateauTop(island) + 2;
     const h = (rw.heading * Math.PI) / 180;
     const fx = Math.sin(h);
     const fz = -Math.cos(h);
@@ -238,7 +248,7 @@ export function createRenderer(canvas) {
     const rz = Math.sin(h);
     // Strip corners in world space. The strip is clipped against the
     // camera's near plane before projecting: its near end passes behind the
-    // camera while the plane taxis on it, and the strip must stay visible
+    // camera while the aircraft taxis on it, and the strip must stay visible
     // then instead of vanishing whole.
     const world = [
       { x: rw.x - fx * rw.length / 2 - rx * rw.width / 2, z: rw.z - fz * rw.length / 2 - rz * rw.width / 2 },
@@ -246,13 +256,13 @@ export function createRenderer(canvas) {
       { x: rw.x + fx * rw.length / 2 + rx * rw.width / 2, z: rw.z + fz * rw.length / 2 + rz * rw.width / 2 },
       { x: rw.x - fx * rw.length / 2 + rx * rw.width / 2, z: rw.z - fz * rw.length / 2 + rz * rw.width / 2 },
     ];
-    const clipped = clipNear(world.map((c) => camSpace(cam, { x: c.x, y: topY, z: c.z })), 2);
+    const clipped = clipNear(world.map((c) => toCamera(cam, { x: c.x, y: topY, z: c.z })), 2);
     if (clipped.length < 3) return;
     const corners = clipped.map((c) => toScreen(cam, c));
     ctx.save();
     ctx.globalAlpha = fade;
     ctx.fillStyle = "#4b4f55";
-    poly(corners);
+    tracePoly(corners);
     ctx.fill();
     // Centre dashes: each dash is a short segment on the centre line, drawn
     // only when both of its ends project in front of the camera, stroked at
@@ -300,7 +310,8 @@ export function createRenderer(canvas) {
     }
   }
 
-  function drawRings(cam, ringIndex, time) {
+  // --- rings and parcel ------------------------------------------------------
+  function paintRings(cam, ringIndex, time) {
     RINGS.forEach((ring, i) => {
       const p = project(cam, ring);
       if (!p) return;
@@ -332,7 +343,7 @@ export function createRenderer(canvas) {
     });
   }
 
-  function drawParcel(cam, show) {
+  function paintParcel(cam, show) {
     if (!show) return;
     const rw = ISLANDS[0].runway;
     const p = project(cam, { x: rw.x, y: 100, z: rw.z + 200 });
@@ -352,11 +363,12 @@ export function createRenderer(canvas) {
     ctx.restore();
   }
 
+  // --- the aircraft -----------------------------------------------------------
   // The courier plane, seen from behind and slightly above, banking with roll.
-  function drawPlane(plane, time) {
+  function paintAircraft(plane, time) {
     const cx = W / 2;
     const cy = H * 0.62;
-    const s = Math.min(W, H) / 9; // plane size in px
+    const s = Math.min(W, H) / 9; // aircraft size in px
     ctx.save();
     ctx.translate(cx, cy);
     ctx.rotate((-plane.roll * Math.PI) / 180);
@@ -423,8 +435,9 @@ export function createRenderer(canvas) {
     ctx.restore();
   }
 
+  // --- instruments -------------------------------------------------------------
   // A lit instrument dial: dark face, glowing ticks, a needle.
-  function dial(x, y, r, label, valueText, frac, color) {
+  function paintDial(x, y, r, label, valueText, frac, color) {
     ctx.save();
     ctx.translate(x, y);
     ctx.fillStyle = "#10161d";
@@ -450,7 +463,7 @@ export function createRenderer(canvas) {
       ctx.lineTo(Math.cos(a) * (r - 3), Math.sin(a) * (r - 3));
       ctx.stroke();
     }
-    const needleA = Math.PI * 0.75 + clamp(frac, 0, 1) * Math.PI * 1.5;
+    const needleA = Math.PI * 0.75 + clampValue(frac, 0, 1) * Math.PI * 1.5;
     ctx.strokeStyle = color;
     ctx.lineWidth = 3;
     ctx.beginPath();
@@ -471,7 +484,7 @@ export function createRenderer(canvas) {
     ctx.restore();
   }
 
-  function drawPanel(plane, missionState, time) {
+  function paintPanel(plane, missionState) {
     const panelH = Math.max(86, H * 0.13);
     const y0 = H - panelH;
     ctx.save();
@@ -492,8 +505,8 @@ export function createRenderer(canvas) {
     const cy = y0 + panelH / 2 - 4;
     const speedKt = plane.speed * KNOTS;
     const altFt = plane.y * FEET;
-    dial(W * 0.1, cy, r, "AIRSPEED kt", String(Math.round(speedKt)), speedKt / 230, "#6effaa");
-    dial(W * 0.24, cy, r, "ALTITUDE ft", String(Math.round(altFt)), clamp(altFt / 3000, 0, 1), "#6ec8ff");
+    paintDial(W * 0.1, cy, r, "AIRSPEED kt", String(Math.round(speedKt)), speedKt / 230, "#6effaa");
+    paintDial(W * 0.24, cy, r, "ALTITUDE ft", String(Math.round(altFt)), clampValue(altFt / 3000, 0, 1), "#6ec8ff");
     // Compass dial: a rotating rose with the heading at the top.
     ctx.save();
     ctx.translate(W * 0.38, cy);
@@ -532,7 +545,7 @@ export function createRenderer(canvas) {
     ctx.fillStyle = "#7e93a3";
     ctx.font = `${Math.max(9, r * 0.24)}px sans-serif`;
     ctx.fillText("HEADING", W * 0.38, cy + r + 14);
-    dial(W * 0.52, cy, r, "FUEL", `${Math.round(plane.fuel)}%`, plane.fuel / 100, plane.fuel < 25 ? "#ff6b5e" : "#6effaa");
+    paintDial(W * 0.52, cy, r, "FUEL", `${Math.round(plane.fuel)}%`, plane.fuel / 100, plane.fuel < 25 ? "#ff6b5e" : "#6effaa");
     // Throttle bar, right of the dials.
     const tx = W * 0.62;
     const tw = W * 0.16;
@@ -558,30 +571,31 @@ export function createRenderer(canvas) {
     ctx.textAlign = "right";
     ctx.fillStyle = "#e8f2f8";
     ctx.font = `bold ${Math.max(12, r * 0.34)}px sans-serif`;
-    ctx.fillText(missionState.mission.name.toUpperCase(), W - 18, cy - 8);
+    ctx.fillText(missionState.sortie.name.toUpperCase(), W - 18, cy - 8);
     ctx.fillStyle = "#9fd8ff";
     ctx.font = `${Math.max(11, r * 0.3)}px monospace`;
     ctx.fillText(`SCORE ${missionState.score}`, W - 18, cy + 12);
-    if (missionState.mission.id === 3) {
+    if (missionState.sortie.id === 3) {
       ctx.fillStyle = missionState.timeLeft < 60 ? "#ff6b5e" : "#ffd23f";
-      ctx.fillText(`TIME ${fmtClock(missionState.timeLeft)}`, W - 18, cy + 30);
+      ctx.fillText(`TIME ${formatClock(missionState.timeLeft)}`, W - 18, cy + 30);
     }
     ctx.restore();
   }
 
-  function fmtClock(sec) {
+  function formatClock(sec) {
     const s = Math.max(0, Math.ceil(sec));
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
   }
 
-  function drawHUD(plane, missionState, target) {
+  // --- HUD -----------------------------------------------------------------------
+  function paintHUD(plane, missionState, target) {
     const speedKt = Math.round(plane.speed * KNOTS);
     const altFt = Math.round(plane.y * FEET);
     const hdg = Math.round(plane.heading);
     ctx.save();
     ctx.textAlign = "left";
     ctx.fillStyle = "rgba(8,14,22,0.55)";
-    roundRect(12, 12, 300, 74, 10);
+    roundRectPath(12, 12, 300, 74, 10);
     ctx.fill();
     ctx.fillStyle = "#e8f2f8";
     ctx.font = "bold 22px monospace";
@@ -603,7 +617,7 @@ export function createRenderer(canvas) {
     const stripH = 40;
     ctx.textAlign = "center";
     ctx.fillStyle = "rgba(8,14,22,0.55)";
-    roundRect(W / 2 - 190, stripY, 380, stripH, 10);
+    roundRectPath(W / 2 - 190, stripY, 380, stripH, 10);
     ctx.fill();
     ctx.save();
     ctx.beginPath();
@@ -637,18 +651,18 @@ export function createRenderer(canvas) {
     // Objective line, top right.
     ctx.textAlign = "right";
     ctx.fillStyle = "rgba(8,14,22,0.55)";
-    const obj = missionState.done ? "MISSION COMPLETE" : objectiveText(missionState);
-    roundRect(W - 330, 12, 318, 74, 10);
+    const obj = missionState.done ? "MISSION COMPLETE" : objectiveShort(missionState);
+    roundRectPath(W - 330, 12, 318, 74, 10);
     ctx.fill();
     ctx.fillStyle = "#ffd23f";
     ctx.font = "bold 13px sans-serif";
-    ctx.fillText(missionState.mission.name.toUpperCase(), W - 24, 34);
+    ctx.fillText(missionState.sortie.name.toUpperCase(), W - 24, 34);
     ctx.fillStyle = "#e8f2f8";
     ctx.font = "13px sans-serif";
     wrapText(obj, W - 24, 56, 300, 17);
     // Target arrow: a chevron at the screen edge pointing at the objective.
     if (target && !missionState.done) {
-      const b = bearingTo(plane, target);
+      const b = relativeBearing(plane, target);
       const distM = Math.round(b.dist);
       const ang = (b.rel * Math.PI) / 180;
       const ax = W / 2 + Math.sin(ang) * 150;
@@ -672,7 +686,7 @@ export function createRenderer(canvas) {
         `${target.name ?? (target.kind === "ring" ? "RING" : target.kind.toUpperCase())} ${distM >= 1000 ? (distM / 1000).toFixed(1) + " km" : distM + " m"}`;
       const tw = ctx.measureText(targetText).width;
       ctx.fillStyle = "rgba(8,14,22,0.75)";
-      roundRect(ax - tw / 2 - 8, ay + 22, tw + 16, 22, 6);
+      roundRectPath(ax - tw / 2 - 8, ay + 22, tw + 16, 22, 6);
       ctx.fill();
       ctx.fillStyle = "#e8f2f8";
       ctx.fillText(targetText, ax, ay + 38);
@@ -683,7 +697,7 @@ export function createRenderer(canvas) {
       const msg = missionState.message;
       ctx.font = "bold 16px sans-serif";
       const mw = ctx.measureText(msg).width + 32;
-      roundRect(W / 2 - mw / 2, H * 0.2, mw, 34, 8);
+      roundRectPath(W / 2 - mw / 2, H * 0.2, mw, 34, 8);
       ctx.fill();
       ctx.fillStyle = "#fff";
       ctx.textAlign = "center";
@@ -692,9 +706,9 @@ export function createRenderer(canvas) {
     ctx.restore();
   }
 
-  function objectiveText(s) {
+  function objectiveShort(s) {
     // Short version of the mission objective for the HUD box.
-    const m = s.mission;
+    const m = s.sortie;
     if (m.id === 1) return s.ringIndex >= 8 ? "All rings flown!" : `Ring ${s.ringIndex + 1} of 8 — follow the gold ring`;
     if (m.id === 2) {
       if (s.hopIndex >= s.hopLegs.length) return "All islands visited — land at Home!";
@@ -722,17 +736,8 @@ export function createRenderer(canvas) {
     if (line) ctx.fillText(line, x, yy);
   }
 
-  function roundRect(x, y, w, h, r) {
-    ctx.beginPath();
-    ctx.moveTo(x + r, y);
-    ctx.arcTo(x + w, y, x + w, y + h, r);
-    ctx.arcTo(x + w, y + h, x, y + h, r);
-    ctx.arcTo(x, y + h, x, y, r);
-    ctx.arcTo(x, y, x + w, y, r);
-    ctx.closePath();
-  }
-
-  function drawOverlay(title, lines, accent) {
+  // --- overlays ------------------------------------------------------------------
+  function paintOverlay(title, lines, accent) {
     ctx.save();
     ctx.fillStyle = "rgba(6,12,20,0.72)";
     ctx.fillRect(0, 0, W, H);
@@ -749,40 +754,40 @@ export function createRenderer(canvas) {
   return {
     render(state, time) {
       const { plane, missionState, target, phase } = state;
-      const cam = camera(plane);
-      drawSkySea(cam, plane);
-      drawClouds(cam);
+      const cam = buildCamera(plane);
+      paintSkySea(cam, plane);
+      paintClouds(cam);
       // Islands far to near so near ones overlap far ones.
       const sorted = [...ISLANDS].sort((a, b) => {
         const da = Math.hypot(a.x - plane.x, a.z - plane.z);
         const db = Math.hypot(b.x - plane.x, b.z - plane.z);
         return db - da;
       });
-      for (const island of sorted) drawIsland(cam, island);
-      drawRings(cam, missionState.ringIndex, time);
-      drawParcel(cam, missionState.mission.id === 3 && !missionState.parcel);
-      drawPlane(plane, time);
-      drawHUD(plane, missionState, target);
-      drawPanel(plane, missionState, time);
+      for (const island of sorted) paintIsland(cam, island);
+      paintRings(cam, missionState.ringIndex, time);
+      paintParcel(cam, missionState.sortie.id === 3 && !missionState.parcel);
+      paintAircraft(plane, time);
+      paintHUD(plane, missionState, target);
+      paintPanel(plane, missionState);
       if (phase === "title") {
-        drawOverlay("SKYCOURIER", [
+        paintOverlay("SKYCOURIER", [
           "Island Hopper — fly the courier plane across the archipelago.",
           "1 Ring Run   •   2 Island Hop   •   3 Courier Dash",
           "Arrows / mouse steer  •  W/S throttle  •  Space brake  •  F flaps  •  P pause",
           "Press 1, 2 or 3 to start a mission — or just fly.",
         ], "#ffd23f");
       } else if (phase === "crashed") {
-        drawOverlay("CRASHED", [
+        paintOverlay("CRASHED", [
           "The courier is a wreck. The parcel service sends its regards.",
           `Score ${missionState.score} — press R to fly again.`,
         ], "#ff6b5e");
       } else if (phase === "complete") {
-        drawOverlay("MISSION COMPLETE", [
+        paintOverlay("MISSION COMPLETE", [
           missionState.message,
           `Score ${missionState.score} — press R to fly again.`,
         ], "#6effaa");
       } else if (phase === "paused") {
-        drawOverlay("PAUSED", ["Press P to keep flying.", ""], "#9fd8ff");
+        paintOverlay("PAUSED", ["Press P to keep flying.", ""], "#9fd8ff");
       }
     },
     resize,

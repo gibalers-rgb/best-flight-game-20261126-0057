@@ -11,10 +11,6 @@ import { extname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(fileURLToPath(new URL("./game", import.meta.url)));
-const args = process.argv.slice(2);
-const portIndex = args.indexOf("--port");
-const requested = portIndex === -1 ? 8080 : Number(args[portIndex + 1]);
-const port = Number.isInteger(requested) && requested > 0 && requested < 65536 ? requested : 8080;
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -25,7 +21,14 @@ const MIME = {
   ".jpeg": "image/jpeg",
 };
 
-createServer((request, response) => {
+function pickPort() {
+  const args = process.argv.slice(2);
+  const at = args.indexOf("--port");
+  const wanted = at === -1 ? 8080 : Number(args[at + 1]);
+  return Number.isInteger(wanted) && wanted > 0 && wanted < 65536 ? wanted : 8080;
+}
+
+function serveFile(request, response) {
   const url = new URL(request.url ?? "/", "http://localhost");
   let pathname;
   try {
@@ -52,7 +55,14 @@ createServer((request, response) => {
     "content-length": size,
     "cache-control": "no-store",
   });
+  if (request.method === "HEAD") {
+    response.end();
+    return;
+  }
   createReadStream(file).pipe(response);
-}).listen(port, "127.0.0.1", () => {
+}
+
+const port = pickPort();
+createServer(serveFile).listen(port, "127.0.0.1", () => {
   console.log(`game/ is on http://localhost:${port}`);
 });

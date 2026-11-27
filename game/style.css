@@ -1,9 +1,12 @@
-html, body {
+/* Skycourier: Island Hopper — the whole game is one full-screen canvas. */
+
+html,
+body {
   margin: 0;
   height: 100%;
   overflow: hidden;
   background: #0b1c33;
-  font-family: "Segoe UI", system-ui, sans-serif;
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
 }
 
 #game {
@@ -24,4 +27,12 @@ html, body {
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+}
+
+.noscript {
+  position: fixed;
+  inset: 40% 0 auto;
+  text-align: center;
+  color: #e8f2f8;
+  font-size: 18px;
 }
